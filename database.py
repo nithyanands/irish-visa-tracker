@@ -364,3 +364,174 @@ def register_alert(email: str, irl_series: int, irl_suffix: int, embassy: str) -
         except Exception as e:
             st.warning(f"Alert registration: {e}")
     return False
+
+# ── Historical dated decisions (from your Excel, seeded to Supabase) ──────────
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_hist() -> pd.DataFrame:
+    """
+    Load date-labelled decisions from Supabase ods_dates table.
+    Seeded once by running seed_supabase.py with your Excel.
+    Returns DataFrame with: irl_series, irl_suffix, decision, decision_date, decision_week
+    Falls back to empty DataFrame if Supabase not configured.
+    """
+    sb = _sb()
+    if sb is None:
+        return pd.DataFrame(columns=["irl_series","irl_suffix","decision","decision_date","decision_week"])
+    try:
+        data = (sb.table("ods_dates")
+                  .select("irl_series,irl_suffix,decision,decision_date,decision_week")
+                  .execute().data)
+        df = pd.DataFrame(data) if data else pd.DataFrame()
+        if len(df) > 0:
+            df["decision_date"] = pd.to_datetime(df["decision_date"]).dt.date
+            df["irl_series"]    = pd.to_numeric(df["irl_series"],    errors="coerce")
+            df["irl_suffix"]    = pd.to_numeric(df["irl_suffix"],    errors="coerce")
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_series_timeline(series4d: int) -> pd.DataFrame:
+    """
+    Day-by-day decision history for a series from ods_dates.
+    Used for: velocity chart, series analysis.
+    Returns: decision_date, count, approved, refused, min_suffix, max_suffix
+    """
+    sb = _sb()
+    if sb is None:
+        return pd.DataFrame()
+    try:
+        data = (sb.table("ods_dates")
+                  .select("irl_suffix,decision,decision_date,decision_week")
+                  .eq("irl_series", series4d)
+                  .order("decision_date")
+                  .execute().data)
+        if not data:
+            return pd.DataFrame()
+        df = pd.DataFrame(data)
+        df["decision_date"] = pd.to_datetime(df["decision_date"]).dt.date
+        df["irl_suffix"]    = pd.to_numeric(df["irl_suffix"], errors="coerce")
+        # Aggregate by date
+        agg = df.groupby("decision_date").agg(
+            count      = ("irl_suffix","count"),
+            approved   = ("decision", lambda x:(x=="Approved").sum()),
+            refused    = ("decision", lambda x:(x=="Refused").sum()),
+            min_suffix = ("irl_suffix","min"),
+            max_suffix = ("irl_suffix","max"),
+        ).reset_index()
+        return agg
+    except Exception:
+        return pd.DataFrame()
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_daily_velocity() -> pd.DataFrame:
+    """
+    Overall daily decision counts from ods_dates.
+    Used for: daily velocity chart on community page.
+    """
+    sb = _sb()
+    if sb is None:
+        return pd.DataFrame()
+    try:
+        data = (sb.table("ods_dates")
+                  .select("decision_date,decision")
+                  .eq("is_baseline", False)   # exclude 16 Feb cumulative batch
+                  .execute().data)
+        if not data:
+            return pd.DataFrame()
+        df = pd.DataFrame(data)
+        df["decision_date"] = pd.to_datetime(df["decision_date"]).dt.date
+        daily = df.groupby("decision_date").agg(
+            total    = ("decision","count"),
+            approved = ("decision", lambda x:(x=="Approved").sum()),
+            refused  = ("decision", lambda x:(x=="Refused").sum()),
+        ).reset_index()
+        daily["rate_pct"] = (daily["approved"] / daily["total"] * 100).round(1)
+        return daily
+    except Exception:
+        return pd.DataFrame()
+
+# ── Lookup IRL in ods_dates (date-labelled DB) ────────────────────────────────
+@st.cache_data(ttl=300, show_spinner=False)
+def lookup_irl_in_db(irl_series: int, irl_suffix: int) -> dict | None:
+    """
+    Check ods_dates for a specific IRL.
+    Returns {decision, decision_date, decision_week} or None.
+    Used to show decision date alongside status.
+    """
+    sb = _sb()
+    if sb is None: return None
+    try:
+        data = (sb.table("ods_dates")
+                  .select("decision,decision_date,decision_week,is_baseline")
+                  .eq("irl_series", irl_series)
+                  .eq("irl_suffix", irl_suffix)
+                  .limit(1)
+                  .execute().data)
+        if data:
+            r = data[0]
+            return {
+                "decision":      r["decision"],
+                "decision_date": r["decision_date"],
+                "decision_week": r.get("decision_week",""),
+                "is_baseline":   r.get("is_baseline", False),
+            }
+        return None
+    except Exception:
+        return None
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_db_stats() -> dict:
+    """
+    Overall ods_dates stats for display.
+    Returns totals, date range, last sync date.
+    """
+    sb = _sb()
+    if sb is None: return {}
+    try:
+        # Total rows
+        total_res = sb.table("ods_dates").select("id", count="exact").execute()
+        total = total_res.count or 0
+
+        # Latest decision date (non-baseline only)
+        latest_res = (sb.table("ods_dates")
+                        .select("decision_date")
+                        .eq("is_baseline", False)
+                        .order("decision_date", desc=True)
+                        .limit(1)
+                        .execute().data)
+        latest = latest_res[0]["decision_date"] if latest_res else None
+
+        # Earliest decision date
+        earliest_res = (sb.table("ods_dates")
+                          .select("decision_date")
+                          .eq("is_baseline", False)
+                          .order("decision_date", desc=False)
+                          .limit(1)
+                          .execute().data)
+        earliest = earliest_res[0]["decision_date"] if earliest_res else None
+
+        # Approval rate (non-baseline)
+        approved_res = (sb.table("ods_dates")
+                          .select("id", count="exact")
+                          .eq("is_baseline", False)
+                          .eq("decision", "Approved")
+                          .execute())
+        approved = approved_res.count or 0
+
+        daily_total_res = (sb.table("ods_dates")
+                             .select("id", count="exact")
+                             .eq("is_baseline", False)
+                             .execute())
+        daily_total = daily_total_res.count or 0
+
+        return {
+            "total":        total,
+            "daily_total":  daily_total,
+            "approved":     approved,
+            "rate":         round(approved / daily_total * 100, 1) if daily_total > 0 else 0,
+            "latest_date":  latest,
+            "earliest_date": earliest,
+        }
+    except Exception:
+        return {}

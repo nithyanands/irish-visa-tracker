@@ -48,3 +48,24 @@ ALTER TABLE alerts    ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "public_read_community"    ON community FOR SELECT USING (true);
 CREATE POLICY "service_insert_community" ON community FOR INSERT WITH CHECK (true);
 CREATE POLICY "service_all_alerts"       ON alerts    FOR ALL   USING (true);
+
+-- Date-labelled decisions (seeded from your Excel via seed_supabase.py)
+-- Gives the app real decision dates for velocity and cohort analysis.
+CREATE TABLE IF NOT EXISTS ods_dates (
+    id              SERIAL PRIMARY KEY,
+    irl_series      SMALLINT NOT NULL,
+    irl_suffix      SMALLINT NOT NULL,
+    decision        TEXT     NOT NULL,
+    decision_date   DATE     NOT NULL,
+    decision_week   TEXT,
+    is_baseline     BOOLEAN NOT NULL DEFAULT FALSE,  -- TRUE = cumulative pre-tracking batch
+    created_at      TIMESTAMPTZ DEFAULT NOW(),
+    UNIQUE (irl_series, irl_suffix)
+);
+
+CREATE INDEX idx_ods_dates_series ON ods_dates(irl_series);
+CREATE INDEX idx_ods_dates_date   ON ods_dates(decision_date);
+
+ALTER TABLE ods_dates ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "public_read_ods_dates"  ON ods_dates FOR SELECT USING (true);
+CREATE POLICY "service_insert_ods"     ON ods_dates FOR INSERT WITH CHECK (true);
