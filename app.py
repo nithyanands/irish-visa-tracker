@@ -15,7 +15,7 @@ from database import (
     calc_working_days, add_workdays, speed_bracket,
     BRACKETS, BRACKET_LABELS,
     load_hist, get_series_timeline, get_daily_velocity,
-    lookup_irl_in_db, get_db_stats,
+    lookup_irl_in_db, get_db_stats, get_connection_status,
 )
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -695,4 +695,41 @@ Search UPI ID above in any UPI app
         st.info("Enter your email in the Track tab's alert form — we'll use that to notify you.")
 
     st.divider()
+    # ── Connection diagnostic ─────────────────────────────────────────────
+    with st.expander("🔧 Connection status (for setup verification)"):
+        conn = get_connection_status()
+        if conn["ok"]:
+            st.success("✅ Supabase connected successfully")
+        else:
+            st.error(f"❌ Supabase not connected: {conn['error']}")
+            st.markdown("""
+**How to fix:**
+
+Go to your Streamlit Cloud app → **⋮ (three dots)** → **Settings** → **Secrets**
+
+Make sure your secrets look EXACTLY like this (copy and paste):
+```toml
+[supabase]
+url         = "https://YOUR-PROJECT-REF.supabase.co"
+anon_key    = "eyJhbGc..."
+service_key = "eyJhbGc..."
+```
+
+Common mistakes:
+- `url` named as `SUPABASE_URL` → wrong, must be `url`
+- `anon_key` named as `anon` or `ANON_KEY` → wrong, must be `anon_key`  
+- `service_key` named as `service_role` → wrong, must be `service_key`
+- Missing `[supabase]` section header
+- Trailing slash on the URL: `https://xxx.supabase.co/` → remove the `/`
+""")
+        st.markdown(f"""
+| Check | Status |
+|---|---|
+| `[supabase]` section exists | {"✅" if "supabase" in (st.secrets if hasattr(st, "secrets") else {}) else "❌"} |
+| `url` key set | {"✅" if conn["url_set"] else "❌"} |
+| `anon_key` set | {"✅" if conn["anon_set"] else "❌"} |
+| `service_key` set | {"✅" if conn["service_set"] else "❌"} |
+| URL value | `{conn["url_value"] or "empty"}` |
+""")
+
     st.caption("Independent tool. Not affiliated with the Irish Embassy, ISD, or any immigration authority.")

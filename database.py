@@ -91,15 +91,86 @@ def norm_dec(raw) -> str:
 # ── Supabase client ───────────────────────────────────────────────────────────
 @st.cache_resource(show_spinner=False)
 def _sb(role: str = "anon"):
+    """
+    Create Supabase client from Streamlit secrets.
+    Secrets must be structured EXACTLY as:
+      [supabase]
+      url         = "https://xxxxxxxxxxxx.supabase.co"
+      anon_key    = "eyJhbGc..."
+      service_key = "eyJhbGc..."
+    """
     try:
         from supabase import create_client
-        key = st.secrets["supabase"]["service_key" if role=="service" else "anon_key"]
-        return create_client(st.secrets["supabase"]["url"], key)
+        
+        # Validate secrets exist with correct names
+        if "supabase" not in st.secrets:
+            return None
+        
+        url = st.secrets["supabase"].get("url", "")
+        if not url:
+            return None
+        
+        # Remove trailing slash if present
+        url = url.rstrip("/")
+        
+        key_name = "service_key" if role == "service" else "anon_key"
+        key = st.secrets["supabase"].get(key_name, "")
+        if not key:
+            return None
+        
+        return create_client(url, key)
     except Exception:
         return None
 
 def _sb_ok() -> bool:
     return _sb() is not None
+
+def get_connection_status() -> dict:
+    """
+    Returns a dict describing the Supabase connection status.
+    Used by the app to show clear error messages.
+    """
+    status = {"ok": False, "url_set": False, "anon_set": False, 
+              "service_set": False, "url_value": "", "error": ""}
+    try:
+        if "supabase" not in st.secrets:
+            status["error"] = "No [supabase] section in secrets"
+            return status
+        
+        url = st.secrets["supabase"].get("url","").rstrip("/")
+        anon = st.secrets["supabase"].get("anon_key","")
+        svc  = st.secrets["supabase"].get("service_key","")
+        
+        status["url_set"]     = bool(url)
+        status["anon_set"]    = bool(anon)
+        status["service_set"] = bool(svc)
+        status["url_value"]   = url[:40] if url else ""
+        
+        if not url:
+            status["error"] = "url is empty in [supabase] secrets"
+            return status
+        if not url.startswith("https://"):
+            status["error"] = f"url must start with https:// — got: {url[:30]}"
+            return status
+        if not url.endswith(".supabase.co"):
+            status["error"] = f"url must end with .supabase.co — got: {url[-30:]}"
+            return status
+        if not anon:
+            status["error"] = "anon_key is empty in [supabase] secrets"
+            return status
+        if not svc:
+            status["error"] = "service_key is empty in [supabase] secrets"
+            return status
+        
+        # Try actual connection
+        from supabase import create_client
+        client = create_client(url, anon)
+        client.table("community").select("id").limit(1).execute()
+        status["ok"] = True
+        return status
+    except Exception as e:
+        status["error"] = str(e)
+        return status
 
 # ── ODS Fetch (New Delhi) ─────────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
