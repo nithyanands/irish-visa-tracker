@@ -88,42 +88,55 @@ def norm_dec(raw) -> str:
     if "withdr" in r: return "Withdrawn"
     return "Unknown"
 
-# ── Supabase client ───────────────────────────────────────────────────────────
+# ── Supabase clients ──────────────────────────────────────────────────────────
+# Two separate cached functions — one per key type.
+# @st.cache_resource with parameters is unreliable across Streamlit versions;
+# separate functions guarantee the correct client is always returned.
+
+def _get_supabase_url() -> str:
+    """Return normalised Supabase URL from secrets, or empty string."""
+    try:
+        url = st.secrets["supabase"].get("url", "").strip().rstrip("/")
+        if "supabase.co" in url:
+            parts = url.split("://", 1)
+            if len(parts) == 2:
+                url = parts[0] + "://" + parts[1].lower()
+        return url
+    except Exception:
+        return ""
+
 @st.cache_resource(show_spinner=False)
-def _sb(role: str = "anon"):
-    """
-    Create Supabase client from Streamlit secrets.
-    Secrets must be structured EXACTLY as:
-      [supabase]
-      url         = "https://xxxxxxxxxxxx.supabase.co"
-      anon_key    = "eyJhbGc..."
-      service_key = "eyJhbGc..."
-    """
+def _sb_anon():
+    """Supabase client with anon key — for all read operations."""
     try:
         from supabase import create_client
-        
-        # Validate secrets exist with correct names
-        if "supabase" not in st.secrets:
+        url = _get_supabase_url()
+        key = st.secrets["supabase"].get("anon_key", "")
+        if not url or not key:
             return None
-        
-        url = st.secrets["supabase"].get("url", "")
-        if not url:
-            return None
-        
-        # Remove trailing slash if present
-        url = url.rstrip("/")
-        
-        key_name = "service_key" if role == "service" else "anon_key"
-        key = st.secrets["supabase"].get(key_name, "")
-        if not key:
-            return None
-        
         return create_client(url, key)
     except Exception:
         return None
 
+@st.cache_resource(show_spinner=False)
+def _sb_svc():
+    """Supabase client with service_key — for all write operations."""
+    try:
+        from supabase import create_client
+        url = _get_supabase_url()
+        key = st.secrets["supabase"].get("service_key", "")
+        if not url or not key:
+            return None
+        return create_client(url, key)
+    except Exception:
+        return None
+
+# Backwards-compat shim — existing callers use _sb() and _sb("service")
+def _sb(role: str = "anon"):
+    return _sb_svc() if role == "service" else _sb_anon()
+
 def _sb_ok() -> bool:
-    return _sb() is not None
+    return _sb_anon() is not None
 
 def get_connection_status() -> dict:
     """
@@ -163,9 +176,12 @@ def get_connection_status() -> dict:
             return status
         
         # Try actual connection
+        # Test both keys
         from supabase import create_client
-        client = create_client(url, anon)
-        client.table("community").select("id").limit(1).execute()
+        anon_client = create_client(url, anon)
+        anon_client.table("community").select("id").limit(1).execute()
+        svc_client  = create_client(url, svc)
+        svc_client.table("community").select("id").limit(1).execute()
         status["ok"] = True
         return status
     except Exception as e:
