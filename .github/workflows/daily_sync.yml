@@ -2,15 +2,18 @@ name: Daily ODS Sync
 
 on:
   schedule:
-    # 11:30 IST = 06:00 UTC, Mon–Fri (embassy publishes by ~11am IST)
+    # 11:30 IST = 06:00 UTC, Mon–Fri
     - cron: '0 6 * * 1-5'
-  # Allow manual trigger from GitHub Actions tab
   workflow_dispatch:
+
+# Opt into Node.js 24 now — removes all deprecation warnings
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   sync:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
 
     steps:
       - name: Checkout repository
@@ -20,10 +23,40 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-          cache: 'pip'
 
       - name: Install dependencies
-        run: pip install requests pandas odfpy openpyxl beautifulsoup4 supabase
+        run: |
+          pip install --upgrade pip
+          pip install requests pandas odfpy openpyxl beautifulsoup4 "supabase>=2.4.2"
+
+      - name: Verify environment
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          python - <<'PYEOF'
+          import os, sys
+          url = os.environ.get('SUPABASE_URL','')
+          key = os.environ.get('SUPABASE_KEY','')
+          print(f"SUPABASE_URL set: {bool(url)}")
+          if url: print(f"  value starts with: {url[:35]}")
+          print(f"SUPABASE_KEY set: {bool(key)}")
+          if key: print(f"  value starts with: {key[:20]}")
+          if not url or not key:
+              print("ERROR: Secret(s) missing. Check repo Settings > Secrets > Actions")
+              sys.exit(1)
+          if not url.startswith("https://"):
+              print("ERROR: SUPABASE_URL must start with https://")
+              sys.exit(1)
+          try:
+              from supabase import create_client
+              sb = create_client(url, key)
+              result = sb.table("ods_dates").select("id", count="exact").limit(1).execute()
+              print(f"Supabase connection OK — ods_dates accessible")
+          except Exception as e:
+              print(f"Supabase error: {e}")
+              sys.exit(1)
+          PYEOF
 
       - name: Run daily sync
         env:
@@ -37,4 +70,5 @@ jobs:
         with:
           name: sync-log-${{ github.run_id }}
           path: sync_log.txt
+          if-no-files-found: warn
           retention-days: 30
