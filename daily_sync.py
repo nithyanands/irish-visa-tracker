@@ -24,7 +24,7 @@ import pandas as pd
 from io import BytesIO
 from bs4 import BeautifulSoup
 from datetime import date, timedelta, datetime
-import pytz
+from zoneinfo import ZoneInfo
 
 # ── Config ────────────────────────────────────────────────────────────────────
 SUPABASE_URL  = os.environ.get("SUPABASE_URL", "")
@@ -33,7 +33,7 @@ ND_PAGE_URL   = "https://www.ireland.ie/en/india/newdelhi/services/visas/process
 ODS_FOLDER    = "4526"
 ODS_LINK_TXT  = "Visa decisions made from 1 January 2026 to"
 BATCH_SIZE    = 500
-IST           = pytz.timezone("Asia/Kolkata")
+IST           = ZoneInfo("Asia/Kolkata")
 
 HOLIDAYS_2026 = {
     date(2026,1,1), date(2026,2,2), date(2026,3,17),
@@ -324,4 +324,11 @@ def main():
     save_log()
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        import traceback
+        log(f"❌ Unhandled exception: {e}")
+        log(traceback.format_exc())
+        save_log()
+        sys.exit(1)
