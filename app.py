@@ -708,41 +708,144 @@ Search UPI ID above in any UPI app
         st.info("Enter your email in the Track tab's alert form — we'll use that to notify you.")
 
     st.divider()
-    # ── Connection diagnostic ─────────────────────────────────────────────
-    with st.expander("🔧 Connection status (for setup verification)"):
-        conn = get_connection_status()
-        if conn["ok"]:
-            st.success("✅ Supabase connected successfully")
+
+    # ════════════════════════════════════════════════════════
+    #  SYSTEM STATUS & DEBUG PANEL
+    # ════════════════════════════════════════════════════════
+    st.markdown("### 🔧 System Status")
+    st.caption("Live diagnostic of all connected services — click Refresh to recheck")
+
+    if st.button("🔄 Refresh Status", key="refresh_debug"):
+        get_debug_stats.clear()
+        get_connection_status.clear()
+        st.rerun()
+
+    with st.spinner("Checking system status..."):
+        dbg = get_debug_stats(ods_df=ods_df)
+
+    # ── 1. Data Sources ──────────────────────────────────────
+    with st.expander("📡 Live data sources", expanded=True):
+        r1, r2 = st.columns(2)
+        with r1:
+            st.markdown("**New Delhi ODS**")
+            if nd_n > 0:
+                st.success(f"✅ {nd_n:,} decisions loaded")
+                st.caption(f"File date: {ods_date.strftime('%a %d %b %Y') if ods_date else 'unknown'}")
+            else:
+                st.error("❌ Failed to load ODS")
+            with st.expander("Fetch log"):
+                for line in ods_log:
+                    if "✅" in line:   st.success(line)
+                    elif "❌" in line: st.error(line)
+                    elif "⚠️" in line: st.warning(line)
+                    else:              st.text(line)
+        with r2:
+            st.markdown("**Dublin ISD**")
+            if dub_n > 0:
+                st.success(f"✅ {dub_n:,} decisions loaded")
+            else:
+                st.warning("⚠️ 0 decisions — updates Tuesdays only")
+
+    # ── 2. Supabase Connection ───────────────────────────────
+    with st.expander("🗄️ Supabase database", expanded=True):
+        c1, c2 = st.columns(2)
+        with c1:
+            st.markdown("**Connectivity**")
+            st.markdown(f"URL: `{dbg['url_masked']}`")
+            st.markdown(f"Read client (anon key): **{'✅ Connected' if dbg['supabase_anon'] else '❌ Failed'}**")
+            st.markdown(f"Write client (service key): **{'✅ Connected' if dbg['supabase_svc'] else '❌ Failed'}**")
+            if not dbg["supabase_anon"] or not dbg["supabase_svc"]:
+                st.error("Fix: check [supabase] section in Streamlit Secrets")
+                st.code('[supabase]\nurl         = "https://xxx.supabase.co"\nanon_key    = "eyJhbGc..."\nservice_key = "eyJhbGc..."')
+        with c2:
+            st.markdown("**Table row counts**")
+            od = dbg.get("ods_dates", {})
+            cs_d = dbg.get("community_stats", {})
+            al = dbg.get("alerts_stats", {})
+            st.dataframe([
+                {"Table": "ods_dates — total",         "Rows": f"{od.get('total',0):,}",    "Note": ""},
+                {"Table": "  baseline rows (16 Feb)",  "Rows": f"{od.get('baseline',0):,}", "Note": "cumulative batch"},
+                {"Table": "  daily dated rows",        "Rows": f"{od.get('daily',0):,}",   "Note": f"{od.get('earliest_date','?')} → {od.get('latest_date','?')}"},
+                {"Table": "community",                 "Rows": f"{cs_d.get('total',0):,}", "Note": f"decided: {cs_d.get('approved',0)+cs_d.get('refused',0)} / pending: {cs_d.get('pending',0)}"},
+                {"Table": "alerts",                    "Rows": f"{al.get('total',0):,}",   "Note": f"awaiting: {al.get('pending',0)}"},
+            ], use_container_width=True, hide_index=True)
+
+    # ── 3. Sync Health ────────────────────────────────────────
+    with st.expander("🔄 Daily sync health"):
+        od = dbg.get("ods_dates", {})
+        latest = od.get("latest_date")
+        if latest:
+            from datetime import date as _date, timedelta as _td, datetime as _dt
+            latest_d   = _dt.strptime(str(latest), "%Y-%m-%d").date()
+            days_since = (_date.today() - latest_d).days
+            if days_since == 0:
+                st.success(f"✅ Synced today ({latest})")
+            elif days_since <= 1:
+                st.success(f"✅ Synced {latest} ({days_since}d ago) — Mon–Fri schedule")
+            elif days_since <= 3:
+                st.info(f"ℹ️ Last sync: {latest} ({days_since}d ago) — weekend gap is normal")
+            else:
+                st.warning(f"⚠️ Last sync: {latest} ({days_since}d ago) — check GitHub Actions")
         else:
-            st.error(f"❌ Supabase not connected: {conn['error']}")
-            st.markdown("""
-**How to fix:**
+            st.error("❌ No dated rows in ods_dates — seed not run yet")
 
-Go to your Streamlit Cloud app → **⋮ (three dots)** → **Settings** → **Secrets**
+        ig = dbg.get("integrity", {})
+        if ig:
+            st.markdown(f"**ODS vs DB:** {ig.get('gap_status','—')}")
+            i1, i2, i3 = st.columns(3)
+            i1.metric("Live ODS",     f"{ig.get('live_ods_count',0):,}")
+            i2.metric("In ods_dates", f"{ig.get('db_count',0):,}")
+            i3.metric("Gap",          f"{ig.get('gap',0):,}")
+        st.caption("Sync schedule: Mon–Fri 11:30 IST  |  Sunday ping: keeps Supabase free tier active")
 
-Make sure your secrets look EXACTLY like this (copy and paste):
-```toml
-[supabase]
-url         = "https://YOUR-PROJECT-REF.supabase.co"
-anon_key    = "eyJhbGc..."
-service_key = "eyJhbGc..."
-```
+    # ── 4. Community & Alerts ────────────────────────────────
+    with st.expander("👥 Community & alerts"):
+        cs_d = dbg.get("community_stats", {})
+        al   = dbg.get("alerts_stats", {})
+        ca1, ca2, ca3, ca4 = st.columns(4)
+        ca1.metric("Total submissions",   cs_d.get("total",0))
+        ca2.metric("Approved reported",   cs_d.get("approved",0))
+        ca3.metric("Pending reported",    cs_d.get("pending",0))
+        ca4.metric("Alert registrations", al.get("total",0))
+        by_type = cs_d.get("by_type", {})
+        if by_type:
+            st.markdown("**By visa type:**")
+            st.dataframe([
+                {"Visa type": vt, "Submissions": d["count"],
+                 "Decided": d["decided"], "Median days": d["median"] or "—"}
+                for vt, d in sorted(by_type.items(), key=lambda x: x[1]["count"], reverse=True)
+            ], use_container_width=True, hide_index=True)
 
-Common mistakes:
-- `url` named as `SUPABASE_URL` → wrong, must be `url`
-- `anon_key` named as `anon` or `ANON_KEY` → wrong, must be `anon_key`  
-- `service_key` named as `service_role` → wrong, must be `service_key`
-- Missing `[supabase]` section header
-- Trailing slash on the URL: `https://xxx.supabase.co/` → remove the `/`
-""")
-        st.markdown(f"""
-| Check | Status |
-|---|---|
-| `[supabase]` section exists | {"✅" if "supabase" in (st.secrets if hasattr(st, "secrets") else {}) else "❌"} |
-| `url` key set | {"✅" if conn["url_set"] else "❌"} |
-| `anon_key` set | {"✅" if conn["anon_set"] else "❌"} |
-| `service_key` set | {"✅" if conn["service_set"] else "❌"} |
-| URL value | `{conn["url_value"] or "empty"}` |
-""")
+    # ── 5. App Configuration ──────────────────────────────────
+    with st.expander("⚙️ App configuration"):
+        for name, val, placeholder in [
+            ("KOFI_URL",   KOFI_URL,   "ko-fi.com/yourname"),
+            ("UPI_ID",     UPI_ID,     "yourname@upi"),
+            ("WISE_AFF",   WISE_AFF,   "yourref"),
+            ("NIYO_AFF",   NIYO_AFF,   "yourref"),
+            ("INSURE_AFF", INSURE_AFF, "ref=visa"),
+        ]:
+            if placeholder in val:
+                st.warning(f"⚠️ {name} — still placeholder, update in app.py")
+            else:
+                st.success(f"✅ {name} — configured")
+        st.divider()
+        st.markdown("**Streamlit secrets:**")
+        try:
+            rows = [
+                {"Key": "[supabase] section", "Present": "✅" if "supabase" in st.secrets else "❌"},
+                {"Key": "url",                "Present": "✅" if st.secrets.get("supabase",{}).get("url") else "❌"},
+                {"Key": "anon_key",           "Present": "✅" if st.secrets.get("supabase",{}).get("anon_key") else "❌"},
+                {"Key": "service_key",        "Present": "✅" if st.secrets.get("supabase",{}).get("service_key") else "❌"},
+            ]
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+        except Exception as e:
+            st.warning(f"Could not read secrets: {e}")
+
+    # ── 6. Errors ─────────────────────────────────────────────
+    if dbg.get("errors"):
+        with st.expander("❌ Errors detected"):
+            for err in dbg["errors"]:
+                st.error(err)
 
     st.caption("Independent tool. Not affiliated with the Irish Embassy, ISD, or any immigration authority.")
