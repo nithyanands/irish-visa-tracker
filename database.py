@@ -622,3 +622,137 @@ def get_db_stats() -> dict:
         }
     except Exception:
         return {}
+
+# ── Debug / admin stats ────────────────────────────────────────────────────────
+@st.cache_data(ttl=60, show_spinner=False)   # short cache so refresh works
+def get_debug_stats(ods_df=None) -> dict:
+    """
+    Comprehensive system status for the debug panel.
+    Returns a dict with all sections.
+    """
+    stats = {
+        "supabase_anon":    False,
+        "supabase_svc":     False,
+        "url_masked":       "",
+        "ods_dates":        {},
+        "community_stats":  {},
+        "alerts_stats":     {},
+        "integrity":        {},
+        "errors":           [],
+    }
+
+    # ── Supabase connectivity ─────────────────────────────────────────────
+    try:
+        url = _get_supabase_url()
+        stats["url_masked"] = url[:22] + "..." + url[-12:] if len(url) > 34 else url
+        anon = _sb_anon()
+        if anon:
+            anon.table("ods_dates").select("id").limit(1).execute()
+            stats["supabase_anon"] = True
+    except Exception as e:
+        stats["errors"].append(f"Anon client: {e}")
+
+    try:
+        svc = _sb_svc()
+        if svc:
+            svc.table("community").select("id").limit(1).execute()
+            stats["supabase_svc"] = True
+    except Exception as e:
+        stats["errors"].append(f"Service client: {e}")
+
+    if not stats["supabase_anon"]:
+        return stats   # nothing else will work without a connection
+
+    sb = _sb_anon()
+
+    # ── ods_dates stats ───────────────────────────────────────────────────
+    try:
+        total_r   = sb.table("ods_dates").select("id", count="exact").execute()
+        base_r    = sb.table("ods_dates").select("id", count="exact").eq("is_baseline", True).execute()
+        daily_r   = sb.table("ods_dates").select("id", count="exact").eq("is_baseline", False).execute()
+        latest_r  = (sb.table("ods_dates")
+                       .select("decision_date")
+                       .eq("is_baseline", False)
+                       .order("decision_date", desc=True)
+                       .limit(1).execute().data)
+        earliest_r= (sb.table("ods_dates")
+                       .select("decision_date")
+                       .eq("is_baseline", False)
+                       .order("decision_date", desc=False)
+                       .limit(1).execute().data)
+        appr_r    = (sb.table("ods_dates")
+                       .select("id", count="exact")
+                       .eq("is_baseline", False)
+                       .eq("decision", "Approved")
+                       .execute())
+        stats["ods_dates"] = {
+            "total":        total_r.count  or 0,
+            "baseline":     base_r.count   or 0,
+            "daily":        daily_r.count  or 0,
+            "approved":     appr_r.count   or 0,
+            "latest_date":  latest_r[0]["decision_date"]   if latest_r   else None,
+            "earliest_date":earliest_r[0]["decision_date"] if earliest_r else None,
+        }
+        d = stats["ods_dates"]
+        d["approval_rate"] = round(d["approved"] / d["daily"] * 100, 1) if d["daily"] > 0 else 0
+    except Exception as e:
+        stats["errors"].append(f"ods_dates query: {e}")
+
+    # ── community stats ───────────────────────────────────────────────────
+    try:
+        comm_total  = sb.table("community").select("id", count="exact").execute()
+        comm_pend   = sb.table("community").select("id", count="exact").eq("outcome", "Pending").execute()
+        comm_appr   = sb.table("community").select("id", count="exact").eq("outcome", "Approved").execute()
+        comm_ref    = sb.table("community").select("id", count="exact").eq("outcome", "Refused").execute()
+        # By visa type
+        all_comm    = sb.table("community").select("visa_type, outcome, working_days").execute().data
+        by_type = {}
+        for row in all_comm:
+            vt = row.get("visa_type","Other")
+            if vt not in by_type: by_type[vt] = {"count":0,"decided":0,"days":[]}
+            by_type[vt]["count"] += 1
+            if row.get("outcome") not in ("Pending", None):
+                by_type[vt]["decided"] += 1
+                if row.get("working_days"): by_type[vt]["days"].append(row["working_days"])
+        for vt in by_type:
+            days = by_type[vt]["days"]
+            by_type[vt]["median"] = sorted(days)[len(days)//2] if days else None
+        stats["community_stats"] = {
+            "total":   comm_total.count or 0,
+            "pending": comm_pend.count  or 0,
+            "approved":comm_appr.count  or 0,
+            "refused": comm_ref.count   or 0,
+            "by_type": by_type,
+        }
+    except Exception as e:
+        stats["errors"].append(f"community query: {e}")
+
+    # ── alerts stats ──────────────────────────────────────────────────────
+    try:
+        alerts_total  = sb.table("alerts").select("id", count="exact").execute()
+        alerts_pend   = sb.table("alerts").select("id", count="exact").eq("notified", False).execute()
+        alerts_done   = sb.table("alerts").select("id", count="exact").eq("notified", True).execute()
+        stats["alerts_stats"] = {
+            "total":     alerts_total.count or 0,
+            "pending":   alerts_pend.count  or 0,
+            "notified":  alerts_done.count  or 0,
+        }
+    except Exception as e:
+        stats["errors"].append(f"alerts query: {e}")
+
+    # ── data integrity ────────────────────────────────────────────────────
+    try:
+        if ods_df is not None and len(stats["ods_dates"]) > 0:
+            live_count = len(ods_df)
+            db_count   = stats["ods_dates"]["total"]
+            gap        = live_count - db_count
+            stats["integrity"] = {
+                "live_ods_count": live_count,
+                "db_count":       db_count,
+                "gap":            gap,
+                "gap_status":     "✅ In sync" if gap <= 0 else f"⚠️ {gap} rows in ODS not yet in DB",
+            }
+    except Exception as e:
+        stats["errors"].append(f"integrity check: {e}")
+
+    return stats

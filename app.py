@@ -15,7 +15,7 @@ from database import (
     calc_working_days, add_workdays, speed_bracket,
     BRACKETS, BRACKET_LABELS,
     load_hist, get_series_timeline, get_daily_velocity,
-    lookup_irl_in_db, get_db_stats, get_connection_status,
+    lookup_irl_in_db, get_db_stats, get_connection_status, get_debug_stats,
 )
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -278,21 +278,25 @@ def _show_community_form(up, emb_date, vfs_date, my_dec, ods_df,
                 else:
                     st.error("Could not save your submission. Check Supabase connection.")
 
-    # Daily velocity + series timeline (below form, always visible)
-    st.divider()
+    # Daily velocity + series timeline
+    # Only show if ods_dates has been seeded (data exists)
     daily_vel = get_daily_velocity()
     if len(daily_vel) > 0:
-        st.markdown("#### Daily decision velocity (your date-labelled data)")
+        st.divider()
+        st.markdown("#### Daily decision velocity")
+        st.caption(f"New decisions published each day — {len(daily_vel)} dated days on record")
         vel = daily_vel.set_index("decision_date")[["approved","refused"]].copy()
-        vel.index = vel.index.astype(str)
+        vel.index = [str(d) for d in vel.index]
         st.bar_chart(vel, color=["#1a6b3c","#c0392b"])
 
     if up:
         series_tl = get_series_timeline(up["series4d"])
         if len(series_tl) > 0:
-            st.markdown(f"#### Series {up['series4d']} — decision timeline")
+            st.divider()
+            st.markdown(f"#### Series {up['series4d']} — day-by-day decisions")
+            st.caption(f"When applications from this series were decided — {len(series_tl)} active dates")
             tl = series_tl.set_index("decision_date")[["count"]].copy()
-            tl.index = tl.index.astype(str)
+            tl.index = [str(d) for d in tl.index]
             st.bar_chart(tl)
 
 
@@ -546,7 +550,16 @@ Among {total} similar {st.session_state.visa_type} visa applicants · median: Da
 <div style="font-size:13px;margin-top:8px">{note}</div>
 </div>""", unsafe_allow_html=True)
             else:
-                st.info("No community data yet for your visa type. Submit your dates below to help build this.")
+                st.markdown("""
+<div style="background:var(--color-background-secondary);border-radius:8px;
+padding:14px 16px;border-left:3px solid var(--color-border-warning);margin:10px 0">
+<div style="font-size:13px;font-weight:500;margin-bottom:4px">No community data yet for your visa type</div>
+<div style="font-size:13px;color:var(--color-text-secondary)">
+Community data is voluntary date submissions from other applicants.
+Once a few people submit their VFS and embassy dates, this card will show
+real processing times — far more accurate than the generic range below.
+<br><br>Be the first: scroll down to the <strong>Share your dates</strong> form.
+</div></div>""", unsafe_allow_html=True)
 
         # When will mine be decided?
         if emb_date:
