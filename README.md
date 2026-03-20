@@ -2,7 +2,7 @@
 
 Free community-powered Irish visa application tracker.
 
-**[Live App →](https://your-app-url.streamlit.app)**
+**[Live App →](https://irish-visa-tracker.streamlit.app)**
 
 ## What it does
 
