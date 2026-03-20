@@ -4,3 +4,9 @@ __pycache__/
 *.pyc
 .env
 .DS_Store
+
+# Never commit data files with IRL numbers
+*.xlsx
+*.xls
+ods_dates_seed.csv
+seed_log.txt
