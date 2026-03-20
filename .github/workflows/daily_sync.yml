@@ -2,8 +2,8 @@ name: Daily ODS Sync
 
 on:
   schedule:
-    # 06:00 UTC = 11:30 IST, Mon–Fri
-    - cron: '0 6 * * 1-5'
+    - cron: '0 6 * * 1-5'   # Mon–Fri 11:30 IST (06:00 UTC)
+    - cron: '0 6 * * 0'     # Sunday  11:30 IST — keeps Supabase free tier alive
   workflow_dispatch:
 
 env:
@@ -13,6 +13,8 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # Full sync only on weekdays; Sunday just pings Supabase
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 6 * * 1-5'
 
     steps:
       - name: Checkout repository
@@ -48,3 +50,26 @@ jobs:
           path: sync_log.txt
           if-no-files-found: warn
           retention-days: 30
+
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Only run on Sunday to prevent Supabase free tier from pausing
+    if: github.event.schedule == '0 6 * * 0'
+
+    steps:
+      - name: Ping Supabase
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          pip install "supabase>=2.4.2" --quiet
+          python - <<'EOF'
+          import os
+          url = os.environ['SUPABASE_URL'].strip().rstrip('/').lower()
+          key = os.environ['SUPABASE_KEY'].strip()
+          from supabase import create_client
+          sb = create_client(url, key)
+          r = sb.table('ods_dates').select('id', count='exact').limit(1).execute()
+          print(f'Sunday ping OK — ods_dates has {r.count} rows — Supabase active')
+          EOF
