@@ -298,7 +298,7 @@ def fetch_dublin() -> pd.DataFrame:
 # ── Community reads ────────────────────────────────────────────────────────────
 @st.cache_data(ttl=180, show_spinner=False)
 def get_community() -> pd.DataFrame:
-    sb = _sb()
+    sb = _sb_svc()  # community locked to service role
     if sb is None:
         if os.path.exists("community.json"):
             try:
@@ -394,6 +394,20 @@ def submit_community(
     vfs_date: date, emb_received: date,
     outcome: str, decision_date: date = None,
 ) -> bool:
+    # ── Input validation ──────────────────────────────────────────────────
+    if irl_series < 5000 or irl_series > 9999:
+        if hasattr(st, 'error'): st.error("Invalid IRL series number")
+        return False
+    if vfs_date and vfs_date > date.today():
+        if hasattr(st, 'error'): st.error("VFS date cannot be in the future")
+        return False
+    if vfs_date and emb_received and emb_received < vfs_date:
+        if hasattr(st, 'error'): st.error("Embassy received date must be after VFS submitted date")
+        return False
+    if decision_date and emb_received and decision_date < emb_received:
+        if hasattr(st, 'error'): st.error("Decision date must be after embassy received date")
+        return False
+
     wd  = calc_working_days(emb_received, decision_date) if decision_date else None
     cd  = (decision_date - emb_received).days            if decision_date else None
     vtd = (emb_received  - vfs_date).days                if vfs_date      else None
@@ -461,7 +475,7 @@ def load_hist() -> pd.DataFrame:
     Returns DataFrame with: irl_series, irl_suffix, decision, decision_date, decision_week
     Falls back to empty DataFrame if Supabase not configured.
     """
-    sb = _sb()
+    sb = _sb_svc()  # ods_dates blocked to anon key
     if sb is None:
         return pd.DataFrame(columns=["irl_series","irl_suffix","decision","decision_date","decision_week"])
     try:
@@ -484,7 +498,7 @@ def get_series_timeline(series4d: int) -> pd.DataFrame:
     Used for: velocity chart, series analysis.
     Returns: decision_date, count, approved, refused, min_suffix, max_suffix
     """
-    sb = _sb()
+    sb = _sb_svc()  # ods_dates blocked to anon key
     if sb is None:
         return pd.DataFrame()
     try:
@@ -516,7 +530,7 @@ def get_daily_velocity() -> pd.DataFrame:
     Overall daily decision counts from ods_dates.
     Used for: daily velocity chart on community page.
     """
-    sb = _sb()
+    sb = _sb_svc()  # ods_dates blocked to anon key
     if sb is None:
         return pd.DataFrame()
     try:
@@ -546,7 +560,7 @@ def lookup_irl_in_db(irl_series: int, irl_suffix: int) -> dict | None:
     Returns {decision, decision_date, decision_week} or None.
     Used to show decision date alongside status.
     """
-    sb = _sb()
+    sb = _sb_svc()  # ods_dates blocked to anon key
     if sb is None: return None
     try:
         data = (sb.table("ods_dates")
@@ -668,19 +682,19 @@ def get_debug_stats(ods_df=None) -> dict:
     # ── ods_dates stats ───────────────────────────────────────────────────
     try:
         total_r   = sb.table("ods_dates").select("id", count="exact").execute()
-        base_r    = sb.table("ods_dates").select("id", count="exact").eq("is_baseline", True).execute()
-        daily_r   = sb.table("ods_dates").select("id", count="exact").eq("is_baseline", False).execute()
-        latest_r  = (sb.table("ods_dates")
+        base_r    = sb_svc.table("ods_dates").select("id", count="exact").eq("is_baseline", True).execute()
+        daily_r   = sb_svc.table("ods_dates").select("id", count="exact").eq("is_baseline", False).execute()
+        latest_r  = (sb_svc.table("ods_dates")
                        .select("decision_date")
                        .eq("is_baseline", False)
                        .order("decision_date", desc=True)
                        .limit(1).execute().data)
-        earliest_r= (sb.table("ods_dates")
+        earliest_r= (sb_svc.table("ods_dates")
                        .select("decision_date")
                        .eq("is_baseline", False)
                        .order("decision_date", desc=False)
                        .limit(1).execute().data)
-        appr_r    = (sb.table("ods_dates")
+        appr_r    = (sb_svc.table("ods_dates")
                        .select("id", count="exact")
                        .eq("is_baseline", False)
                        .eq("decision", "Approved")

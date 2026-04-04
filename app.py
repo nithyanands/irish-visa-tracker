@@ -105,6 +105,16 @@ if "irl" in p and not st.session_state.searched:
         except: pass
         st.session_state.searched = True
 
+# ── Admin gate ────────────────────────────────────────────────────────────────────
+# Debug panel only visible if ?admin=YOUR_ADMIN_SECRET is in the URL
+# Set ADMIN_SECRET in Streamlit Cloud secrets to enable
+_admin_secret = ""
+try:
+    _admin_secret = st.secrets.get("admin_secret", "")
+except Exception:
+    pass
+_is_admin = bool(_admin_secret) and st.query_params.get("admin","") == _admin_secret
+
 # ── Load live data ─────────────────────────────────────────────────────────────
 with st.spinner("Loading live embassy data..."):
     ods_df, ods_date, ods_log = fetch_ods()
@@ -222,11 +232,18 @@ def _show_community_form(up, emb_date, vfs_date, my_dec, ods_df,
             )
 
         st.caption("✅ Your full IRL is never stored — only series prefix and suffix (e.g. 8181 + 8952)")
+        # Honeypot — hidden from real users, bots fill it in
+        honeypot = st.text_input("Leave this blank", value="", key="hp_field",
+                                  label_visibility="collapsed")
         submitted = st.form_submit_button(
             "Submit my timeline", type="primary", use_container_width=True
         )
 
         if submitted:
+            # Honeypot check — bots fill hidden fields, real users don't
+            if honeypot:
+                st.success("✅ Thank you!")  # silent discard
+                st.stop()
             f_parsed = parse_irl(f_irl)
             if not f_parsed:
                 st.error("Please enter a valid 8-digit IRL number")
@@ -710,8 +727,17 @@ Search UPI ID above in any UPI app
     st.divider()
 
     # ════════════════════════════════════════════════════════
-    #  SYSTEM STATUS & DEBUG PANEL
+    #  SYSTEM STATUS & DEBUG PANEL (admin only)
     # ════════════════════════════════════════════════════════
+    if _is_admin:
+        st.markdown("### 🔧 System Status")
+        st.caption("Live diagnostic of all connected services — click Refresh to recheck")
+    else:
+        st.info("System status is visible to administrators only.")
+        st.caption("Independent tool. Not affiliated with the Irish Embassy, ISD, or any immigration authority.")
+        st.stop()
+
+    # Admin-only content below ──────────────────────────────────────
     st.markdown("### 🔧 System Status")
     st.caption("Live diagnostic of all connected services — click Refresh to recheck")
 
