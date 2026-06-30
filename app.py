@@ -76,12 +76,18 @@ div[data-testid="metric-container"] {
 
 # ── Session state ─────────────────────────────────────────────────────────────
 DEFAULTS = {
-    "irl_str": "", "parsed": None,
-    "embassy": "New Delhi 🇮🇳", "visa_type": "Study",
-    "vfs_city": "Chennai", "vfs_date": None, "emb_date": None,
+    "irl_str": "", 
+    "parsed": None,
+    "embassy": "New Delhi 🇮🇳", 
+    "visa_type": "Study",
+    "vfs_city": "Chennai", 
+    "vfs_date": None, 
+    "emb_date": None,
     "searched": False,
     # resolved from ODS after search
-    "my_dec": None, "my_source": None, "my_dec_date": None,
+    "my_dec": None, 
+    "my_source": None, 
+    "my_dec_date": None,
 }
 for k, v in DEFAULTS.items():
     if k not in st.session_state:
